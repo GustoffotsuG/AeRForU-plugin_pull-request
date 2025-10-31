@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AeRForU Settings</title>
+</head>
+<body>
+    <div class="container">
+        <!--New version available ...link-->
+        <div id="version-notification" class="notification hidden">
+            <p>A new version of AeRForU is available!</p>
+            <a href="https://github.com/Jaimepas77/AeRForU" target="_blank">Get it now</a>
+            <button id="close-notification" class="close-btn">x</button>
+        </div>
+
+        <h1 class="title">Welcome to AeRForU!</h1>
+
+        <h2 class="section-title">Problem List Settings</h2>
+        <form id="optionsFormList" class="settings-form">
+            <div class="setting-item">
+                <label for="showLevel" class="setting-label">Show problems level</label>
+                <label class="switch">
+                    <input type="checkbox" name="showLevel" id="showLevel">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+
+            <div class="setting-item">
+                <label for="bold" class="setting-label">Enable bold text</label>
+                <label class="switch">
+                    <input type="checkbox" name="bold" id="bold">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+
+            <div class="setting-item">
+                <label for="AcColor" class="setting-label">AC color</label>
+                <input type="color" name="AcColor" id="AcColor" class="color-input">
+            </div>
+
+            <div class="setting-item">
+                <label for="WaColor" class="setting-label">WA color</label>
+                <input type="color" name="WaColor" id="WaColor" class="color-input">
+            </div>
+
+            <div class="setting-item">
+                <input type="button" name="Reset" id="Reset" value="Reset" class="reset-btn">
+            </div>
+        </form>
+
+        <h2 class="section-title">24 en 23 Settings</h2>
+        <form id="optionsForm24en23" class="settings-form">
+            <div class="setting-item">
+                <label for="hyperlinks" class="setting-label">Enable hyperlinks</label>
+                <label class="switch">
+                    <input type="checkbox" name="hyperlinks" id="hyperlinks">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+        </form>
+
+        <h2 class="section-title">Download Problems</h2>
+        <form id="optionsFormDownload" class="settings-form">
+            <div class="setting-item">
+                <input type="button" name="Download" id="Download" value="Download AC Submissions" class="download-btn">
+            </div>
+        </form>
+    </div>
+
+    <script defer src="options.js" type="module"></script>
+    <script src="../lib/jszip.min.js"></script>
+    <script type="module" src="download.js"></script>
+
+</body>
+</html>
