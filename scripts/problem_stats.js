@@ -37,41 +37,85 @@ chrome.storage.local.get(['SHOW_LEVEL'], function(data) {
 })();
 
 async function addRankingBtn() {
-    try {
-        const finalTable = document.getElementsByClassName("problemBestSubmissions")[0];
-    }
-    catch (error) {
-        console.log("Table not found yet, waiting...");
+    // Espera a que exista la tabla
+    const tryGetTable = () => document.getElementsByClassName("problemBestSubmissions")[0];
+    let finalTable = tryGetTable();
+    if (!finalTable) {
+        // reintentar hasta que exista
         setTimeout(addRankingBtn, 100);
         return;
     }
-    const finalTable = document.getElementsByClassName("problemBestSubmissions")[0];
-    // console.log(finalTable);
 
-    const btn_html = `
-    <tfoot id="seeMoreRankingRow" style="">
-        <tr>
-            <td class="seeMore" colspan="7">
-                <span class="btn btn-primary btn-xs">Ver más</span>
-            </td>
-        </tr>
-    </tfoot>
-    `;
+    // Evitar insertar el botón dos veces
+    if (document.getElementById("seeMoreRankingRow")) return;
 
-    //Insert the button at the end of the table
-    finalTable.insertAdjacentHTML('beforeend', btn_html);
+    const tbody = finalTable.querySelector("tbody");
+    if (!tbody) return; // por seguridad
 
-    document.getElementById("seeMoreRankingRow").addEventListener("click", function() {
-        const urlParams = new URLSearchParams(window.location.search);
-        const problem_id = urlParams.get('id');
-        const tbody = document.querySelector(".problemBestSubmissions tbody");
-        next_url = `https://aceptaelreto.com/ws/problem/${problem_id}/ranking?start=${tbody.children.length+1}&size=20`;
+    const problem_id = new URLSearchParams(window.location.search).get("id");
+    if (!problem_id) return;
 
-        // Call the function to load more rankings
-        loadMoreRankings(next_url);
-    });
+    const currentCount = tbody.children.length;
 
+    // Si no hay filas visibles (por seguridad) dejamos que el sistema normal lo gestione
+    // pero aún así comprobamos si existe al menos 1 elemento más en el servidor.
+    const checkUrl = `https://aceptaelreto.com/ws/problem/${problem_id}/ranking?start=${currentCount + 1}&size=1`;
+
+    try {
+        const response = await fetch(checkUrl);
+        if (!response.ok) {
+            console.warn(`Comprobación de "ver más" falló (status ${response.status}). No añadimos el botón.`);
+            return;
+        }
+        const data = await response.json();
+
+        // Si no hay más resultados, no añadimos el botón
+        if (!data.submission || data.submission.length === 0) {
+            console.log("No hay más rankings: no se mostrará 'Ver más'.");
+            return;
+        }
+
+        // Si hay al menos 1 resultado, añadimos el tfoot con el botón
+        const btn_html = `
+            <tfoot id="seeMoreRankingRow">
+                <tr>
+                    <td class="seeMore" colspan="7">
+                        <span class="btn btn-primary btn-xs">Ver más</span>
+                    </td>
+                </tr>
+            </tfoot>
+        `;
+        finalTable.insertAdjacentHTML('beforeend', btn_html);
+
+        // Listener para cargar más (usamos delegation mínima)
+        document.getElementById("seeMoreRankingRow").addEventListener("click", async function handler() {
+            // Desactivar temporalmente para evitar pulsaciones múltiples
+            const span = this.querySelector("span.btn");
+            span.innerText = "Cargando...";
+            span.classList.add("disabled");
+
+            const next_url = `https://aceptaelreto.com/ws/problem/${problem_id}/ranking?start=${tbody.children.length + 1}&size=20`;
+            await loadMoreRankings(next_url);
+
+            // Si el botón todavía existe al volver, restauramos texto (loadMoreRankings puede haberlo eliminado)
+            const seeMore = document.getElementById("seeMoreRankingRow");
+            if (seeMore) {
+                const s = seeMore.querySelector("span.btn");
+                if (s) {
+                    s.innerText = "Ver más";
+                    s.classList.remove("disabled");
+                }
+            }
+        });
+
+        console.log("Botón 'Ver más' añadido (hay más datos).");
+    } catch (err) {
+        console.error("Error comprobando si hay más rankings:", err);
+        // En caso de fallos de red preferimos NO mostrar el botón, para evitar UX mala.
+    }
 }
+
+
 
 async function loadMoreRankings(url) {
     console.log("Loading more rankings from:", url);
