@@ -244,6 +244,13 @@ async function getProblemInfo(problemId) {
     return problem_data;
 }
 
+async function getProblemRanking(problemId, start=1, size=20) {
+    let problem_ranking_url = `https://aceptaelreto.com/ws/problem/${problemId}/ranking?start=${start}&n=${size}`;
+    const request = await fetch(problem_ranking_url);
+    const ranking_data = await request.json();
+    return ranking_data;
+}
+
 async function getProblemLevel(problemId) {
     return levels_dict[problemId] || null;
 }
@@ -281,129 +288,75 @@ async function getLevelsText(type=1) {
     };
 }
 
-// --- getUserProblemPosition (REEMPLAZADA por versión robusta y con fallback a ranking) ---
-
+// --- getUserProblemPosition (versión optimizada con carrera paralela) ---
 /**
  * Obtiene la posición real del usuario en el ranking de un problema.
- * - Primero intenta usar https://aerdata.lluiscab.net/aer/user/profile/${user_nick}
- *   que es la opcion mas rapida y eficaz
- * - Si no tiene la info, realiza paginado sobre
- *   https://aceptaelreto.com/ws/problem/${problemId}/ranking y calcula
- *   la posición entre usuarios únicos (ignorando envíos repetidos). El mayor problema es que tiene que ir de 20 en 20
- *
+ * Ejecuta dos estrategias en paralelo y devuelve la primera que tenga éxito:
+ * 
+ * 1. Aerdata (rápido): https://aerdata.lluiscab.net/aer/user/profile/${user_nick}
+ *    - Respuesta instantánea si está disponible
+ * 
+ * 2. Fallback (completo): https://aceptaelreto.com/ws/problem/${problemId}/ranking
+ *    - Pagina el ranking completo usando nextLink
+ *    - Se ejecuta en paralelo con Aerdata, por lo que no añade latencia si Aerdata tiene éxito
+ * 
  * Devuelve:
- *  - número (1-based) si se encuentra
- *  - null si no se encuentra o hay un error
+ *  - número (1-based) si se encuentra en cualquiera de las dos fuentes
+ *  - null si no se encuentra o ambas fuentes fallan
  */
 async function getUserProblemPosition(user_nick, problemId) {
-    console.log("🔍 Buscando posición del usuario...");
-
-    // --- Intento 1: Aerdata ---
-    // console.log("📊 Accediendo al ranking de Aerdata");
-    // try {
-    //     const url = `https://aerdata.lluiscab.net/aer/user/profile/${encodeURIComponent(user_nick)}`;
-    //     const resp = await fetch(url);
-
-    //     if (resp.ok) {
-    //         const data = await resp.json();
-    //         const problems = data?.data?.user?.problems;
-
-    //         //Busqueda de la posicion del usuario
-    //         const found = problems?.find(p => String(p.id) === String(problemId));
-    //         const pos = found?.result?.position ?? null;
-    //         if (pos != null) {
-    //             console.log(`✅ Posición desde Aerdata: ${pos}`);
-    //             return pos;
-    //         }
-    //     }
-    // } catch (err) {
-    //     console.warn("⚠️ Aerdata falló:", err);
-    // }
-
-    // --- Intento 2: Fallback XML directo ---
-    console.log("↩️ Usando fallback (JSON de Acepta el Reto)");
+    let winner = null;
     
-    const userId = String(await getUserID(user_nick));
-    const userNickNorm = user_nick.trim().toLowerCase();
-    //console.log("🧩 userId:", userId, "userNickNorm:", userNickNorm);
-
-    const PAGE_SIZE = 100;           // nº de elementos por página
-    const PARALLEL_PAGES = 5;        // nº de páginas que pedimos a la vez
-
-    let start = 1;
-    let uniqueRank = 0;
-    const seen = new Set();
-    let found = null;
-
-    console.log(`🎯 Buscando coincidencias con userId="${userId}" o nick="${userNickNorm}"`);
-    while (!found) {
-        // Generar el bloque de URLs (5 páginas por tanda)
-        const urls = Array.from({ length: PARALLEL_PAGES }, (_, i) =>
-            `https://aceptaelreto.com/ws/problem/${encodeURIComponent(problemId)}/ranking?start=${start + i * PAGE_SIZE}&size=${PAGE_SIZE}`
-        );
-
-        console.log(`📥 Descargando bloque desde posición ${start} (${urls.length} páginas en paralelo)`);
-
-        // Descargar todas las páginas simultáneamente
-        const responses = await Promise.all(
-            urls.map(u => 
-                fetch(u)
-                    .then(r => (r.ok ? r.json() : null))
-                    .catch(err => {
-                        console.warn("⚠️ Error al descargar página:", err);
-                        return null;
-                    })
-            )
-        );
-
-        // Filtrar páginas válidas
-        const pages = responses.filter(p => p && Array.isArray(p.submission));
-        if (pages.length === 0) {
-            console.log("🔚 No hay más páginas válidas, deteniendo búsqueda.");
-            break;
-        }
-
-        // Procesar todas las páginas en orden
-        for (const page of pages) {
-            for (const sub of page.submission) {
-                const uid = sub?.user?.id ? String(sub.user.id).trim() : null;
-                const nick = sub?.user?.nick ? sub.user.nick.trim().toLowerCase() : null;
-                const key = uid || `nick:${nick || ""}`;
-
-                if (nick === userNickNorm || uid === userId) {
-                    console.log(`🧩 Coincidencia encontrada → uid:${uid} vs ${userId} | nick:${nick} vs ${userNickNorm}`);
-                }
-                if (uniqueRank % 100 === 0) console.log(`📊 Recuento parcial: ${uniqueRank} usuarios únicos`);
-
-                if (!seen.has(key)) {
-                    seen.add(key);
-                    uniqueRank++;
-
-                    // Coincidencia
-                    if ((uid && userId && uid === userId) || (nick && userNickNorm && nick === userNickNorm)) {
-                        console.log(`✅ Usuario encontrado → id:${uid}, nick:${nick}, posición ${uniqueRank}`);
-                        return uniqueRank;
+    // Intento 1: Aerdata
+    const tryAerdata = async () => {
+        try {
+            const data = await fetch(`https://aerdata.lluiscab.net/aer/user/profile/${encodeURIComponent(user_nick)}`).then(r => r.json());
+            const pos = data?.data?.user?.problems?.find(p => String(p.id) === String(problemId))?.result?.position;
+            
+            if (pos) { winner = 'aerdata'; return pos; }
+        } catch {} throw new Error();
+    };
+    
+    // Intento 2: Fallback
+    const tryFallback = async () => {
+        const userId = String(await getUserID(user_nick));
+        const userNick = user_nick.trim().toLowerCase();
+        let nextUrl = `https://aceptaelreto.com/ws/problem/${problemId}/ranking?start=1&size=100`;
+        
+        const seen = new Set();
+        let rank = 0;
+        
+        while (nextUrl) {
+            try {
+                const data = await fetch(nextUrl).then(r => r.json());
+                
+                for (const sub of data.submission) {
+                    const uid = sub.user?.id ? String(sub.user.id) : null;
+                    const nick = sub.user?.nick?.trim().toLowerCase();
+                    const key = uid || `nick:${nick || ''}`;
+                    
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        rank++;
+                        
+                        if ((uid && uid === userId) || (nick && nick === userNick)) {
+                            winner = 'fallback';
+                            return rank;
+                        }
                     }
                 }
-            }
-            if (found) break;
-        }
-
-        // Si no lo hemos encontrado, avanzamos al siguiente bloque
-        if (!found) {
-            const lastPage = pages[pages.length - 1];
-            if (!lastPage.nextLink) {
-                console.log("🔚 Último bloque alcanzado (sin nextLink).");
-                break;
-            }
-            start += PAGE_SIZE * PARALLEL_PAGES;
-        }
-        
-    }
-
-    console.log("ℹ️ Usuario no encontrado en ranking.");
-    return null;
-}
+                
+                nextUrl = data.nextLink;
+            } catch { break; }
+        }throw new Error();
+    };
+    
+    try {
+        const result = await Promise.any([tryAerdata(), tryFallback()]);
+        console.log(`✅ Posición: ${result} (${winner === 'aerdata' ? 'Aerdata' : 'Fallback'})`);
+        return result;
+    } catch { console.log("ℹ️ No encontrado"); return null; }
+}   
 
 
 // --- resto del archivo original (sin cambios) ---
