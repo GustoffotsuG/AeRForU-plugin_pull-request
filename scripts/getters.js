@@ -327,48 +327,78 @@ async function getUserProblemPosition(user_nick, problemId) {
     const userNickNorm = user_nick.trim().toLowerCase();
     //console.log("🧩 userId:", userId, "userNickNorm:", userNickNorm);
 
-    let nextUrl = `https://aceptaelreto.com/ws/problem/${encodeURIComponent(problemId)}/ranking?start=1&size=100`;
-    
-    const seen = new Set();
+    const PAGE_SIZE = 100;           // nº de elementos por página
+    const PARALLEL_PAGES = 5;        // nº de páginas que pedimos a la vez
+
+    let start = 1;
     let uniqueRank = 0;
+    const seen = new Set();
+    let found = null;
 
-    while (nextUrl) {
-        try {
-            //console.log(`📥 Descargando ranking desde: ${nextUrl}`);
-            const resp = await fetch(nextUrl);
-            if (!resp.ok) {
-            console.warn(`❌ HTTP ${resp.status} al obtener ${nextUrl}`);
-            break;
-            }
+    console.log(`🎯 Buscando coincidencias con userId="${userId}" o nick="${userNickNorm}"`);
+    while (!found) {
+        // Generar el bloque de URLs (5 páginas por tanda)
+        const urls = Array.from({ length: PARALLEL_PAGES }, (_, i) =>
+            `https://aceptaelreto.com/ws/problem/${encodeURIComponent(problemId)}/ranking?start=${start + i * PAGE_SIZE}&size=${PAGE_SIZE}`
+        );
 
-            const data = await resp.json();
-            //console.log(`🔎 Analizando ${data.submission.length} submissions...`);
+        console.log(`📥 Descargando bloque desde posición ${start} (${urls.length} páginas en paralelo)`);
 
-            for (const sub of data.submission) {
-                const uid = sub?.user?.id != null ? String(sub.user.id).trim() : null;
-                const nick = sub?.user?.nick ? sub.user.nick.trim().toLowerCase() : null;
+        // Descargar todas las páginas simultáneamente
+        const responses = await Promise.all(
+            urls.map(u => 
+                fetch(u)
+                    .then(r => (r.ok ? r.json() : null))
+                    .catch(err => {
+                        console.warn("⚠️ Error al descargar página:", err);
+                        return null;
+                    })
+            )
+        );
 
-                // clave única preferente por id, sino por nick
-                const key = uid || (`nick:${nick || ""}`);
-
-                if (!seen.has(key)) { // primer envío de este usuario -> cuenta como 1 puesto único
-                    seen.add(key);
-                    uniqueRank += 1;
-
-                    // si coincide con el usuario objetivo, devolvemos la posición única
-                    if ((userId && uid && uid === userId) || (userId && nick && nick === userNickNorm) || (userId && nick && nick === userNickNorm)) {
-                        console.log(`✅ Posición real (usuarios únicos) encontrada: ${uniqueRank} (id:${uid} nick:${nick})`);
-                        return uniqueRank;
-                    }
-                } // si ya estaba en 'seen', ignoramos (es envío repetido de la misma persona)
-            }
-
-            nextUrl = data.nextLink || null;
-            if (!nextUrl) { console.log("🔚 No hay más páginas de ranking disponibles."); }
-        } catch (err) {
-            console.error("💥 Error procesando ranking JSON:", err);
+        // Filtrar páginas válidas
+        const pages = responses.filter(p => p && Array.isArray(p.submission));
+        if (pages.length === 0) {
+            console.log("🔚 No hay más páginas válidas, deteniendo búsqueda.");
             break;
         }
+
+        // Procesar todas las páginas en orden
+        for (const page of pages) {
+            for (const sub of page.submission) {
+                const uid = sub?.user?.id ? String(sub.user.id).trim() : null;
+                const nick = sub?.user?.nick ? sub.user.nick.trim().toLowerCase() : null;
+                const key = uid || `nick:${nick || ""}`;
+
+                if (nick === userNickNorm || uid === userId) {
+                    console.log(`🧩 Coincidencia encontrada → uid:${uid} vs ${userId} | nick:${nick} vs ${userNickNorm}`);
+                }
+                if (uniqueRank % 100 === 0) console.log(`📊 Recuento parcial: ${uniqueRank} usuarios únicos`);
+
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    uniqueRank++;
+
+                    // Coincidencia
+                    if ((uid && userId && uid === userId) || (nick && userNickNorm && nick === userNickNorm)) {
+                        console.log(`✅ Usuario encontrado → id:${uid}, nick:${nick}, posición ${uniqueRank}`);
+                        return uniqueRank;
+                    }
+                }
+            }
+            if (found) break;
+        }
+
+        // Si no lo hemos encontrado, avanzamos al siguiente bloque
+        if (!found) {
+            const lastPage = pages[pages.length - 1];
+            if (!lastPage.nextLink) {
+                console.log("🔚 Último bloque alcanzado (sin nextLink).");
+                break;
+            }
+            start += PAGE_SIZE * PARALLEL_PAGES;
+        }
+        
     }
 
     console.log("ℹ️ Usuario no encontrado en ranking.");
